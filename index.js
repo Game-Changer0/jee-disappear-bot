@@ -1,15 +1,15 @@
 const fs = require('fs');
 const path = require('path');
 
-// Clean old broken sessions on boot
-if (fs.existsSync('./auth_info')) {
-  const files = fs.readdirSync('./auth_info');
-  // Keep only creds.json if you use CREDS_B64, delete others
-  if (process.env.CREDS_B64) {
+if (fs.existsSync('./auth_info') && process.env.CREDS_B64) {
+  try{
+    const files = fs.readdirSync('./auth_info');
     for(const f of files){
-      if(f !== 'creds.json') try{ fs.unlinkSync(path.join('./auth_info', f)); }catch{}
+      if(f !== 'creds.json'){
+        try{ fs.unlinkSync(path.join('./auth_info', f)); }catch{}
+      }
     }
-  }
+  }catch{}
 }
 
 if(process.env.CREDS_B64){
@@ -34,10 +34,12 @@ async function startBot(){
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
   const { version } = await fetchLatestBaileysVersion();
   sock = makeWASocket({ 
-    version, auth: state, printQRInTerminal:false, 
+    version, 
+    auth: state, 
+    printQRInTerminal:false, 
     browser:["JEE Bot","Chrome","1.0"],
-    syncFullHistory:false, markOnlineOnConnect:false,
-    logger: { level: 'silent' } // <-- hides Bad MAC spam
+    syncFullHistory:false, 
+    markOnlineOnConnect:false
   });
   sock.ev.on('creds.update', saveCreds);
   sock.ev.on('connection.update', async ({connection, lastDisconnect, qr})=>{
@@ -54,19 +56,20 @@ async function startBot(){
     try{ for(const x of u){ if(x.id===ACADEMIC_ALLIES_ID && x.ephemeralDuration!==0) await forceOff(); } }catch{}
   });
 }
+
 async function forceOff(){
   if(!isConnected || !sock) return;
   try{ await sock.groupToggleEphemeral(ACADEMIC_ALLIES_ID, 0); console.log("✅ OFF enforced"); }catch(e){ console.log("skip",e.message); }
 }
 setInterval(()=>{ if(isConnected) forceOff(); }, 60000);
 
-app.get('/', (req,res)=>res.status(200).send(isConnected?"Connected ✅":"Starting..."));
+app.get('/', (req,res)=>res.status(200).send(isConnected?"Connected ✅ - Academic Allies protected":"Starting... - wait 20s"));
 app.get('/force-off', async (req,res)=>{ await forceOff(); res.status(200).send("OK - OFF enforced"); });
 app.get('/qr', async (req,res)=>{
   if(isConnected) return res.send("Connected ✅");
-  if(!qrCodeData) return res.status(200).send("Wait 10s and refresh - starting");
+  if(!qrCodeData) return res.status(200).send("No QR yet - refresh after 10s");
   const img = await QRCode.toDataURL(qrCodeData);
-  res.send(`<center><img src="${img}"></center>`);
+  res.send(`<center><img src="${img}"><br>Scan</center>`);
 });
 app.get('/groups', async (req,res)=>{
   if(!isConnected) return res.send("Not connected");
