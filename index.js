@@ -1,6 +1,7 @@
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const express = require('express');
 const QRCode = require('qrcode');
+const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
@@ -8,8 +9,7 @@ let sock;
 let qrCodeData = null;
 let isConnected = false;
 
-// === SET ONLY YOUR ACADEMIC ALLIES GROUP ID HERE ===
-const ACADEMIC_ALLIES_ID = "120363411370862499@g.us"; // <-- REPLACE WITH REAL ID from /groups
+const ACADEMIC_ALLIES_ID = "120363411370862499@g.us"; // <-- PUT YOUR REAL ID HERE
 
 async function startBot(){
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
@@ -22,50 +22,65 @@ async function startBot(){
     if(qr){ qrCodeData = qr; console.log("QR Generated"); }
     if(connection === 'open'){
       isConnected = true; qrCodeData = null;
-      console.log("✅ Connected! Watching only:", ACADEMIC_ALLIES_ID);
-      // Ensure disappearing OFF on start
-      try{ await sock.groupToggleEphemeral(ACADEMIC_ALLIES_ID, 0); console.log("✅ Academic Allies: Disappearing forced OFF"); }catch(e){ console.log("Initial off fail:", e.message); }
+      console.log("✅ Connected");
+      forceOff();
     }
     if(connection === 'close'){
-      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
       isConnected = false;
-      if(shouldReconnect) startBot();
+      if(lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) startBot();
     }
   });
 
-  // AUTO-ENFORCE: whenever group settings change
+  // Listen for change
   sock.ev.on('groups.update', async (updates) => {
-    for(const update of updates){
-      if(update.id === ACADEMIC_ALLIES_ID && update.ephemeralDuration !== undefined){
-        if(update.ephemeralDuration !== 0){
-          console.log(`Someone turned ON disappearing (${update.ephemeralDuration}s) in Academic Allies - turning OFF...`);
-          await new Promise(r=>setTimeout(r,1500));
-          try{
-            await sock.groupToggleEphemeral(ACADEMIC_ALLIES_ID, 0);
-            console.log("✅ Auto turned OFF again");
-          }catch(e){ console.log("Auto-off fail:", e.message); }
-        }
+    for(const u of updates){
+      if(u.id === ACADEMIC_ALLIES_ID && u.ephemeralDuration && u.ephemeralDuration !== 0){
+        console.log("Detected ON - turning OFF");
+        await forceOff();
       }
     }
   });
-
-  sock.ev.on('messages.upsert', async () => {});
 }
 
-app.get('/', (req,res)=> res.send(isConnected ? `Bot Connected ✅ Watching ONLY ${ACADEMIC_ALLIES_ID}` : "Not Connected - go to /qr"));
+async function forceOff(){
+  if(!sock || !isConnected) return;
+  try{
+    await sock.groupToggleEphemeral(ACADEMIC_ALLIES_ID, 0);
+    console.log("✅ Disappearing OFF enforced for Academic Allies");
+  }catch(e){ console.log("forceOff error", e.message); }
+}
+
+// Auto check every 30 sec - so even if event missed, it will turn off again
+setInterval(()=>{ forceOff(); }, 30000);
+
+app.get('/', (req,res)=> res.send(isConnected ? "Connected ✅" : "Not Connected - /qr"));
 app.get('/qr', async (req,res)=>{
   if(isConnected) return res.send("Already Connected ✅");
-  if(!qrCodeData) return res.send("No QR yet, wait 10s and refresh");
-  const qrImg = await QRCode.toDataURL(qrCodeData);
-  res.send(`<div style="text-align:center"><h2>Scan QR</h2><img src="${qrImg}"><br><a href="/qr">Refresh</a></div>`);
+  if(!qrCodeData) return res.send("No QR - refresh in 10s");
+  const img = await QRCode.toDataURL(qrCodeData);
+  res.send(`<center><h2>Scan QR</h2><img src="${img}"><br><a href="/qr">Refresh</a><br><a href="/groups">Groups</a><br><a href="/auth">Download Auth</a></center>`);
 });
 app.get('/groups', async (req,res)=>{
   if(!isConnected) return res.send("Not connected");
   const groups = await sock.groupFetchAllParticipating();
-  let html = "<h2>Copy ID for Academic Allies:</h2><pre>";
-  for(const id in groups){ html += `${groups[id].subject}\n${id}\n\n`; }
+  let html = "<pre>";
+  for(const id in groups) html += `${groups[id].subject}\n${id}\n\n`;
   res.send(html+"</pre>");
 });
+app.get('/auth', (req,res)=>{
+  try{
+    const credsPath = './auth_info/creds.json';
+    if(fs.existsSync(credsPath)){
+      res.download(credsPath, 'creds.json');
+    } else {
+      res.send("No creds yet - connect first then try again. Path: "+credsPath+" exists? "+fs.existsSync('./auth_info'));
+    }
+  }catch(e){ res.send("Auth error: "+e.message); }
+});
+app.get('/force-off', async (req,res)=>{
+  await forceOff();
+  res.send("Forced OFF");
+});
 
-app.listen(PORT, ()=>console.log(`Server on ${PORT}`));
+app.listen(PORT, ()=>console.log("Server on "+PORT));
 startBot();
